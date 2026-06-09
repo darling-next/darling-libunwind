@@ -53,7 +53,7 @@ add_circular(unwind FAT
 
 include(darling_static_lib)
 add_darling_static_library(unwind_static SOURCES ${LIBUNWIND_SOURCES})
-set_target_properties(unwind_static PROPERTIES COMPILE_FLAGS "-DNDEBUG=1")
+set_target_properties(unwind_static PROPERTIES COMPILE_FLAGS "-DNDEBUG=1 -O0")
 make_fat(unwind_static)
 
 install(TARGETS unwind DESTINATION libexec/darling/usr/lib/system)
