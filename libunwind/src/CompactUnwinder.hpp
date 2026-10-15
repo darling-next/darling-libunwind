@@ -258,6 +258,19 @@ void CompactUnwinder_x86<A>::framelessUnwind(
 
 
 #if defined(_LIBUNWIND_TARGET_X86_64)
+// SWIFT ASYNC FRAME MARKER. An async function marks its own frame pointer by ORing bit 60 into it
+// (the arm64 encoding is `orr x29, x29, #0x1000000000000000`; x86-64 ORs the same bit into %rbp), and the
+// extended async frame record lives 8 bytes BELOW the UNTAGGED frame pointer
+// (llvm.swift.async.context.addr / -swift-async-fp). The marker is an ABI tag, not part of the address:
+// x86-64 has no top-byte-ignore, so READING through a marked frame pointer is a non-canonical access --
+// a user-mode #GP, which Linux converts to a kernel-forced SIGSEGV with si_code=SI_KERNEL and si_addr=0
+// (gp_user_force_sig_segv() -> force_sig(SIGSEGV) in arch/x86/kernel/traps.c). Any unwinder that reads
+// through a frame pointer must clear the marker before using the value AS AN ADDRESS; that is the whole
+// contract, and leaving it in makes every async frame unwalkable instead of merely misreported.
+static inline uint64_t clearSwiftAsyncFrameMarker(uint64_t framePointer) {
+  return framePointer & ~((uint64_t)1 << 60);
+}
+
 /// CompactUnwinder_x86_64 uses a compact unwind info to virtually "step" (aka
 /// unwind) by modifying a Registers_x86_64 register set
 template <typename A>
@@ -310,7 +323,8 @@ int CompactUnwinder_x86_64<A>::stepWithCompactEncodingRBPFrame(
   uint32_t savedRegistersLocations =
       EXTRACT_BITS(compactEncoding, UNWIND_X86_64_RBP_FRAME_REGISTERS);
 
-  uint64_t savedRegisters = registers.getRBP() - 8 * savedRegistersOffset;
+  uint64_t savedRegisters =
+      clearSwiftAsyncFrameMarker(registers.getRBP()) - 8 * savedRegistersOffset;
   for (int i = 0; i < 5; ++i) {
     switch (savedRegistersLocations & 0x7) {
     case UNWIND_X86_64_REG_NONE:
@@ -467,7 +481,7 @@ int CompactUnwinder_x86_64<A>::stepWithCompactEncodingFrameless(
 template <typename A>
 void CompactUnwinder_x86_64<A>::frameUnwind(A &addressSpace,
                                             Registers_x86_64 &registers) {
-  uint64_t rbp = registers.getRBP();
+  uint64_t rbp = clearSwiftAsyncFrameMarker(registers.getRBP());
   // ebp points to old ebp
   registers.setRBP(addressSpace.get64(rbp));
   // old esp is ebp less saved ebp and return address
